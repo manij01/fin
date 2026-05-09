@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from app.database import get_db
 from app.market.cache import price_cache
+from app.tickers import normalize_ticker
 
 router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
 
@@ -55,9 +56,10 @@ async def get_watchlist():
 @router.post("", response_model=WatchlistItem)
 async def add_ticker(body: AddTickerRequest):
     """Add a ticker to the watchlist."""
-    ticker = body.ticker.upper().strip()
-    if not ticker:
-        raise HTTPException(status_code=400, detail="Ticker is required")
+    try:
+        ticker = normalize_ticker(body.ticker)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     db = await get_db()
     try:
@@ -83,7 +85,10 @@ async def add_ticker(body: AddTickerRequest):
 @router.delete("/{ticker}")
 async def remove_ticker(ticker: str):
     """Remove a ticker from the watchlist."""
-    ticker = ticker.upper().strip()
+    try:
+        ticker = normalize_ticker(ticker)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     db = await get_db()
     try:
         cursor = await db.execute(

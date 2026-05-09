@@ -4,13 +4,17 @@ import json
 import os
 import uuid
 from datetime import datetime, timezone
+from json import JSONDecodeError
+from typing import Any
 
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from litellm import acompletion
 
 from app.database import get_db
+from app.portfolio import TradeExecutionError, execute_trade_for_user
+from app.tickers import normalize_ticker
 
 router = APIRouter()
 
@@ -26,12 +30,38 @@ class ChatRequest(BaseModel):
 class TradeAction(BaseModel):
     ticker: str
     side: str
-    quantity: float
+    quantity: float = Field(gt=0)
+
+    @field_validator("ticker")
+    @classmethod
+    def normalize_trade_ticker(cls, value: str) -> str:
+        return normalize_ticker(value)
+
+    @field_validator("side")
+    @classmethod
+    def normalize_side(cls, value: str) -> str:
+        side = value.lower().strip()
+        if side not in ("buy", "sell"):
+            raise ValueError("side must be 'buy' or 'sell'")
+        return side
 
 
 class WatchlistChange(BaseModel):
     ticker: str
     action: str  # "add" | "remove"
+
+    @field_validator("ticker")
+    @classmethod
+    def normalize_watchlist_ticker(cls, value: str) -> str:
+        return normalize_ticker(value)
+
+    @field_validator("action")
+    @classmethod
+    def normalize_action(cls, value: str) -> str:
+        action = value.lower().strip()
+        if action not in ("add", "remove"):
+            raise ValueError("action must be 'add' or 'remove'")
+        return action
 
 
 class ChatResponse(BaseModel):
@@ -197,131 +227,41 @@ def _mock_response(message: str) -> ChatResponse:
 
 
 # ---------------------------------------------------------------------------
-# Trade execution
-# ---------------------------------------------------------------------------
-
-
-async def _execute_trade(
-    db, ticker: str, side: str, quantity: float
-) -> str | None:
-    """Execute a trade. Returns error string on failure, None on success."""
-    # We need a price. Use avg_cost for sells, or a default for buys.
-    # In a full system this comes from the price cache. For now, use a
-    # placeholder price of 100.0 if no market data is available.
-    # TODO: integrate with market data price cache when available
-    price = 150.0  # default placeholder
-
-    now = datetime.now(timezone.utc).isoformat()
-
-    if side == "buy":
-        cost = price * quantity
-        cur = await db.execute(
-            "SELECT cash_balance FROM users_profile WHERE id = 'default'"
-        )
-        row = await cur.fetchone()
-        cash = row["cash_balance"]
-        if cost > cash:
-            return f"Insufficient cash: need ${cost:,.2f} but only have ${cash:,.2f}"
-
-        # Deduct cash
-        await db.execute(
-            "UPDATE users_profile SET cash_balance = cash_balance - ? WHERE id = 'default'",
-            (cost,),
-        )
-
-        # Upsert position
-        cur = await db.execute(
-            "SELECT quantity, avg_cost FROM positions WHERE user_id = 'default' AND ticker = ?",
-            (ticker,),
-        )
-        existing = await cur.fetchone()
-        if existing:
-            old_qty = existing["quantity"]
-            old_cost = existing["avg_cost"]
-            new_qty = old_qty + quantity
-            new_avg = ((old_qty * old_cost) + (quantity * price)) / new_qty
-            await db.execute(
-                "UPDATE positions SET quantity = ?, avg_cost = ?, updated_at = ? "
-                "WHERE user_id = 'default' AND ticker = ?",
-                (new_qty, new_avg, now, ticker),
-            )
-        else:
-            await db.execute(
-                "INSERT INTO positions (id, user_id, ticker, quantity, avg_cost, updated_at) "
-                "VALUES (?, 'default', ?, ?, ?, ?)",
-                (str(uuid.uuid4()), ticker, quantity, price, now),
-            )
-
-    elif side == "sell":
-        cur = await db.execute(
-            "SELECT quantity, avg_cost FROM positions WHERE user_id = 'default' AND ticker = ?",
-            (ticker,),
-        )
-        existing = await cur.fetchone()
-        if not existing or existing["quantity"] < quantity:
-            held = existing["quantity"] if existing else 0
-            return f"Insufficient shares: want to sell {quantity} {ticker} but hold {held}"
-
-        price = existing["avg_cost"]  # sell at avg cost for now
-        proceeds = price * quantity
-        new_qty = existing["quantity"] - quantity
-
-        await db.execute(
-            "UPDATE users_profile SET cash_balance = cash_balance + ? WHERE id = 'default'",
-            (proceeds,),
-        )
-
-        if new_qty <= 0:
-            await db.execute(
-                "DELETE FROM positions WHERE user_id = 'default' AND ticker = ?",
-                (ticker,),
-            )
-        else:
-            await db.execute(
-                "UPDATE positions SET quantity = ?, updated_at = ? "
-                "WHERE user_id = 'default' AND ticker = ?",
-                (new_qty, now, ticker),
-            )
-    else:
-        return f"Invalid side: {side}"
-
-    # Record trade
-    await db.execute(
-        "INSERT INTO trades (id, user_id, ticker, side, quantity, price, executed_at) "
-        "VALUES (?, 'default', ?, ?, ?, ?, ?)",
-        (str(uuid.uuid4()), ticker, side, quantity, price, now),
-    )
-    await db.commit()
-    return None
-
-
-# ---------------------------------------------------------------------------
 # Watchlist changes
 # ---------------------------------------------------------------------------
 
 
 async def _execute_watchlist_change(db, ticker: str, action: str) -> str | None:
     """Add/remove a ticker from watchlist. Returns error string on failure."""
+    try:
+        ticker = normalize_ticker(ticker)
+    except ValueError as exc:
+        return str(exc)
+
+    action = action.lower().strip()
     now = datetime.now(timezone.utc).isoformat()
 
     if action == "add":
-        try:
-            await db.execute(
-                "INSERT INTO watchlist (id, user_id, ticker, added_at) VALUES (?, 'default', ?, ?)",
-                (str(uuid.uuid4()), ticker.upper(), now),
-            )
-            await db.commit()
-        except Exception:
+        cur = await db.execute(
+            "SELECT id FROM watchlist WHERE user_id = 'default' AND ticker = ?",
+            (ticker,),
+        )
+        if await cur.fetchone():
             return f"{ticker} is already on the watchlist"
+        await db.execute(
+            "INSERT INTO watchlist (id, user_id, ticker, added_at) VALUES (?, 'default', ?, ?)",
+            (str(uuid.uuid4()), ticker, now),
+        )
 
     elif action == "remove":
         cur = await db.execute(
             "DELETE FROM watchlist WHERE user_id = 'default' AND ticker = ?",
-            (ticker.upper(),),
+            (ticker,),
         )
-        await db.commit()
         if cur.rowcount == 0:
             return f"{ticker} is not on the watchlist"
+    else:
+        return f"Invalid watchlist action: {action}"
 
     return None
 
@@ -329,6 +269,48 @@ async def _execute_watchlist_change(db, ticker: str, action: str) -> str | None:
 # ---------------------------------------------------------------------------
 # LLM call
 # ---------------------------------------------------------------------------
+
+
+def _format_validation_error(error: ValidationError) -> str:
+    """Convert pydantic validation failures into compact chat-visible text."""
+    details = []
+    for err in error.errors():
+        field = ".".join(str(part) for part in err["loc"])
+        details.append(f"{field}: {err['msg']}")
+    return "; ".join(details)
+
+
+def _coerce_chat_response(payload: dict[str, Any]) -> ChatResponse:
+    """Parse LLM JSON while ignoring invalid action items individually."""
+    message = payload.get("message")
+    if not isinstance(message, str) or not message.strip():
+        message = "I could not parse a usable assistant message."
+
+    errors: list[str] = []
+    trades: list[TradeAction] = []
+    for raw_trade in payload.get("trades") or []:
+        try:
+            trades.append(TradeAction.model_validate(raw_trade))
+        except ValidationError as exc:
+            errors.append(f"Ignored invalid trade action ({_format_validation_error(exc)})")
+
+    watchlist_changes: list[WatchlistChange] = []
+    for raw_change in payload.get("watchlist_changes") or []:
+        try:
+            watchlist_changes.append(WatchlistChange.model_validate(raw_change))
+        except ValidationError as exc:
+            errors.append(
+                f"Ignored invalid watchlist action ({_format_validation_error(exc)})"
+            )
+
+    if errors:
+        message += "\n\n(Errors: " + "; ".join(errors) + ")"
+
+    return ChatResponse(
+        message=message,
+        trades=trades or None,
+        watchlist_changes=watchlist_changes or None,
+    )
 
 
 async def _call_llm(messages: list[dict]) -> ChatResponse:
@@ -342,8 +324,18 @@ async def _call_llm(messages: list[dict]) -> ChatResponse:
     )
 
     content = response.choices[0].message.content
-    parsed = json.loads(content)
-    return ChatResponse(**parsed)
+    try:
+        parsed = json.loads(content) if isinstance(content, str) else content
+        if not isinstance(parsed, dict):
+            raise TypeError("LLM response was not a JSON object")
+        return _coerce_chat_response(parsed)
+    except (JSONDecodeError, TypeError, ValidationError) as exc:
+        return ChatResponse(
+            message=(
+                "I could not parse the model response into the expected action format."
+                f"\n\n(Errors: {exc})"
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -378,15 +370,26 @@ async def chat(req: ChatRequest):
 
         # Auto-execute trades
         errors = []
+        executed_trades: list[TradeAction] = []
         if result.trades:
             for trade in result.trades:
-                err = await _execute_trade(
-                    db, trade.ticker, trade.side, trade.quantity
-                )
-                if err:
-                    errors.append(err)
+                try:
+                    executed = await execute_trade_for_user(
+                        db, trade.ticker, trade.side, trade.quantity
+                    )
+                    executed_trades.append(
+                        TradeAction(
+                            ticker=executed.ticker,
+                            side=executed.side,
+                            quantity=executed.quantity,
+                        )
+                    )
+                except TradeExecutionError as exc:
+                    errors.append(str(exc))
+        result.trades = executed_trades or None
 
         # Auto-execute watchlist changes
+        executed_watchlist_changes: list[WatchlistChange] = []
         if result.watchlist_changes:
             for change in result.watchlist_changes:
                 err = await _execute_watchlist_change(
@@ -394,6 +397,9 @@ async def chat(req: ChatRequest):
                 )
                 if err:
                     errors.append(err)
+                else:
+                    executed_watchlist_changes.append(change)
+        result.watchlist_changes = executed_watchlist_changes or None
 
         # Append errors to message if any
         if errors:
@@ -407,9 +413,10 @@ async def chat(req: ChatRequest):
             (str(uuid.uuid4()), req.message, now),
         )
 
-        actions_json = None
-        if result.trades or result.watchlist_changes:
-            actions_json = json.dumps(result.model_dump(exclude={"message"}, exclude_none=True))
+        actions_payload = result.model_dump(exclude={"message"}, exclude_none=True)
+        if errors:
+            actions_payload["errors"] = errors
+        actions_json = json.dumps(actions_payload) if actions_payload else None
 
         await db.execute(
             "INSERT INTO chat_messages (id, user_id, role, content, actions, created_at) "

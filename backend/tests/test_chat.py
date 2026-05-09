@@ -4,17 +4,36 @@ import os
 
 os.environ["LLM_MOCK"] = "true"
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
+import app.database as database
+from app.chat import _coerce_chat_response
 from app.main import app
+from app.market.cache import price_cache
+
+
+@pytest.fixture(autouse=True)
+def seed_prices():
+    """Seed current prices so AI trades use the same path as manual trades."""
+    price_cache.update("AAPL", 150.0)
+    price_cache.update("GOOGL", 175.0)
+    price_cache.update("MSFT", 420.0)
+    price_cache.update("AMZN", 185.0)
+    price_cache.update("TSLA", 250.0)
+    price_cache.update("NVDA", 120.0)
+    price_cache.update("META", 500.0)
+    price_cache.update("JPM", 200.0)
+    price_cache.update("V", 310.0)
+    price_cache.update("NFLX", 650.0)
+    yield
+    price_cache._prices.clear()
 
 
 @pytest_asyncio.fixture
 async def client(tmp_path):
     """Async test client with a fresh per-test SQLite DB."""
-    import app.database as database
-
     db_file = str(tmp_path / "test.db")
     database.DB_PATH = db_file
     await database.init_db()
@@ -40,7 +59,7 @@ async def test_chat_greeting(client):
 
 
 async def test_chat_buy_aapl(client):
-    """Mock buy always buys 10 shares of the matched ticker at $150."""
+    """Mock buy uses canonical trade execution at the cached market price."""
     resp = await client.post("/api/chat", json={"message": "buy some AAPL"})
     assert resp.status_code == 200
     data = resp.json()
@@ -53,6 +72,15 @@ async def test_chat_buy_aapl(client):
     # No errors appended
     assert "Errors" not in data["message"]
 
+    resp = await client.get("/api/portfolio")
+    portfolio = resp.json()
+    assert portfolio["cash_balance"] == 10000.0 - (10 * 150.0)
+    assert portfolio["positions"][0]["ticker"] == "AAPL"
+    assert portfolio["positions"][0]["avg_cost"] == 150.0
+
+    resp = await client.get("/api/portfolio/history")
+    assert len(resp.json()) == 1
+
 
 async def test_chat_sell_insufficient(client):
     """Selling without owning shares should report error in message."""
@@ -61,20 +89,27 @@ async def test_chat_sell_insufficient(client):
     data = resp.json()
     # Upstream appends errors to message
     assert "Insufficient" in data["message"] or "Errors" in data["message"]
+    assert data["trades"] is None
 
 
 async def test_chat_buy_then_sell(client):
-    """Buy then sell should succeed."""
-    # Buy first (10 shares at $150 = $1500)
+    """Buy then sell should use the latest cached market price."""
+    # Buy first (10 shares at $250 = $2500)
     resp = await client.post("/api/chat", json={"message": "buy some TSLA"})
     data = resp.json()
     assert data["trades"][0]["ticker"] == "TSLA"
     assert "Errors" not in data["message"]
 
-    # Sell (10 shares at avg cost)
+    # Sell at the latest market price, not avg cost.
+    price_cache.update("TSLA", 300.0)
     resp = await client.post("/api/chat", json={"message": "sell some TSLA"})
     data = resp.json()
     assert "Insufficient" not in data["message"]
+
+    resp = await client.get("/api/portfolio")
+    portfolio = resp.json()
+    assert portfolio["cash_balance"] == 10500.0
+    assert portfolio["positions"] == []
 
 
 async def test_chat_buy_insufficient_cash(client):
@@ -98,6 +133,11 @@ async def test_chat_watchlist_add(client):
     assert data["watchlist_changes"][0]["ticker"] == "PYPL"
     assert data["watchlist_changes"][0]["action"] == "add"
 
+    resp = await client.post("/api/chat", json={"message": "add PYPL to watchlist"})
+    data = resp.json()
+    assert data["watchlist_changes"] is None
+    assert "already on the watchlist" in data["message"]
+
 
 async def test_chat_watchlist_remove(client):
     resp = await client.post("/api/chat", json={"message": "remove NFLX"})
@@ -118,3 +158,35 @@ async def test_chat_fallback(client):
     resp = await client.post("/api/chat", json={"message": "random nonsense xyz"})
     data = resp.json()
     assert "trade" in data["message"].lower() or "portfolio" in data["message"].lower()
+
+
+async def test_chat_persists_history_actions_and_errors(client):
+    await client.post("/api/chat", json={"message": "sell some AAPL"})
+
+    db = await database.get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT role, content, actions FROM chat_messages ORDER BY created_at"
+        )
+        rows = await cursor.fetchall()
+    finally:
+        await db.close()
+
+    assert [row["role"] for row in rows] == ["user", "assistant"]
+    assert "Insufficient shares" in rows[1]["content"]
+    assert "Insufficient shares" in rows[1]["actions"]
+
+
+def test_coerce_chat_response_ignores_invalid_actions():
+    response = _coerce_chat_response(
+        {
+            "message": "Done.",
+            "trades": [{"ticker": "AAPL", "side": "hold", "quantity": 1}],
+            "watchlist_changes": [{"ticker": "", "action": "add"}],
+        }
+    )
+
+    assert response.trades is None
+    assert response.watchlist_changes is None
+    assert "Ignored invalid trade action" in response.message
+    assert "Ignored invalid watchlist action" in response.message
