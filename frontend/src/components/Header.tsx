@@ -20,11 +20,11 @@ export default function Header({
   connectionStatus,
 }: HeaderProps) {
   return (
-    <header className="flex items-center justify-between border-b border-border bg-bg-secondary px-4 py-2">
+    <header className="flex min-w-[760px] flex-wrap items-center justify-between gap-2 border-b border-border bg-bg-secondary px-4 py-2">
       <div className="flex items-center gap-4">
         <h1 className="text-lg font-bold text-accent-yellow">FinAlly</h1>
       </div>
-      <div className="flex items-center gap-6 text-sm">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
         <div>
           <span className="text-text-secondary">Portfolio </span>
           <span className="font-bold text-accent-blue">

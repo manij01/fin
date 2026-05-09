@@ -34,7 +34,7 @@ export default function TradeBar({ onTradeExecuted }: TradeBarProps) {
   }
 
   return (
-    <div className="flex h-full items-center gap-3 text-xs">
+    <div className="flex h-full flex-wrap items-center gap-2 text-xs sm:gap-3">
       <input
         type="text"
         placeholder="Ticker"
@@ -63,7 +63,7 @@ export default function TradeBar({ onTradeExecuted }: TradeBarProps) {
         SELL
       </button>
       {status && (
-        <span className="text-text-secondary">{status}</span>
+        <span className="min-w-0 flex-1 text-text-secondary">{status}</span>
       )}
     </div>
   );

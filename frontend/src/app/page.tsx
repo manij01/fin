@@ -42,28 +42,36 @@ function usePortfolio() {
 export default function Home() {
   const { prices, connectionStatus, priceHistory } = useMarketData();
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
+  const [dataVersion, setDataVersion] = useState(0);
   const { portfolio, refresh: refreshPortfolio } = usePortfolio();
+  const refreshDashboard = useCallback(() => {
+    void refreshPortfolio();
+    setDataVersion((version) => version + 1);
+  }, [refreshPortfolio]);
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden">
+    <div className="flex min-h-screen flex-col overflow-auto bg-bg-primary xl:h-screen xl:overflow-hidden">
       <Header
         totalValue={portfolio.total_value}
         cashBalance={portfolio.cash_balance}
         connectionStatus={connectionStatus}
       />
 
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 flex-col xl:flex-row">
         {/* Main content area */}
-        <div className="flex min-w-0 flex-1 flex-col gap-1 p-1">
+        <div className="flex min-h-[620px] min-w-[760px] flex-1 flex-col gap-1 p-1 xl:min-h-0">
           {/* Top row: watchlist + chart + portfolio */}
           <div className="flex min-h-0 flex-1 gap-1">
             {/* Watchlist */}
-            <Panel title="Watchlist" className="w-64 shrink-0 overflow-auto">
+            <Panel title="Watchlist" className="w-60 shrink-0 overflow-auto lg:w-64">
               <Watchlist
                 prices={prices}
                 priceHistory={priceHistory}
                 selectedTicker={selectedTicker}
                 onSelectTicker={setSelectedTicker}
+                refreshToken={dataVersion}
+                onInitialTicker={setSelectedTicker}
+                onWatchlistChanged={refreshDashboard}
               />
             </Panel>
 
@@ -76,12 +84,12 @@ export default function Home() {
             </Panel>
 
             {/* Right column: portfolio views */}
-            <div className="flex w-72 shrink-0 flex-col gap-1">
+            <div className="flex w-64 shrink-0 flex-col gap-1 lg:w-72">
               <Panel title="Portfolio Heatmap" className="flex-1">
                 <PortfolioHeatmap positions={portfolio.positions} prices={prices} />
               </Panel>
               <Panel title="P&L" className="flex-1">
-                <PnlChart />
+                <PnlChart refreshToken={dataVersion} />
               </Panel>
               <Panel title="Positions" className="flex-1 overflow-auto">
                 <PositionsTable positions={portfolio.positions} prices={prices} />
@@ -90,13 +98,13 @@ export default function Home() {
           </div>
 
           {/* Trade bar */}
-          <Panel title="Trade" className="h-14 shrink-0">
-            <TradeBar onTradeExecuted={refreshPortfolio} />
+          <Panel title="Trade" className="min-h-14 shrink-0">
+            <TradeBar onTradeExecuted={refreshDashboard} />
           </Panel>
         </div>
 
         {/* Chat sidebar */}
-        <ChatPanel onDataRefresh={refreshPortfolio} />
+        <ChatPanel onDataRefresh={refreshDashboard} />
       </div>
     </div>
   );

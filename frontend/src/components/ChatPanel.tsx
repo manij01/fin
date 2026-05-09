@@ -67,7 +67,7 @@ export default function ChatPanel({ onDataRefresh }: ChatPanelProps) {
     return (
       <button
         onClick={() => setCollapsed(false)}
-        className="flex h-full w-8 shrink-0 items-center justify-center border-l border-border bg-bg-panel text-text-secondary transition-colors hover:text-text-primary"
+        className="flex h-8 w-full shrink-0 items-center justify-center border-t border-border bg-bg-panel text-text-secondary transition-colors hover:text-text-primary xl:h-full xl:w-8 xl:border-l xl:border-t-0"
         aria-label="Expand chat"
       >
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -78,7 +78,7 @@ export default function ChatPanel({ onDataRefresh }: ChatPanelProps) {
   }
 
   return (
-    <div className="flex h-full w-80 shrink-0 flex-col border-l border-border bg-bg-panel">
+    <div className="flex min-h-[320px] w-full shrink-0 flex-col border-t border-border bg-bg-panel xl:h-full xl:w-80 xl:border-l xl:border-t-0">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-text-secondary">

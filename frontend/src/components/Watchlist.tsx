@@ -10,6 +10,9 @@ interface WatchlistProps {
   priceHistory: Record<string, { price: number }[]>;
   selectedTicker: string | null;
   onSelectTicker: (ticker: string) => void;
+  refreshToken?: number;
+  onInitialTicker?: (ticker: string | null) => void;
+  onWatchlistChanged?: () => void;
 }
 
 export default function Watchlist({
@@ -17,32 +20,64 @@ export default function Watchlist({
   priceHistory,
   selectedTicker,
   onSelectTicker,
+  refreshToken = 0,
+  onInitialTicker,
+  onWatchlistChanged,
 }: WatchlistProps) {
   const [tickers, setTickers] = useState<string[]>([]);
   const [newTicker, setNewTicker] = useState("");
+  const selectedTickerRef = useRef(selectedTicker);
+
+  useEffect(() => {
+    selectedTickerRef.current = selectedTicker;
+  }, [selectedTicker]);
 
   useEffect(() => {
     api.getWatchlist().then((items) => {
-      setTickers(items.map((i) => i.ticker));
+      const nextTickers = items.map((i) => i.ticker);
+      const currentSelection = selectedTickerRef.current;
+      setTickers(nextTickers);
+      if (!currentSelection && nextTickers[0]) {
+        onInitialTicker?.(nextTickers[0]);
+      } else if (currentSelection && !nextTickers.includes(currentSelection)) {
+        onInitialTicker?.(nextTickers[0] ?? null);
+      }
     }).catch(() => {});
-  }, []);
+  }, [onInitialTicker, refreshToken]);
 
   const addTicker = useCallback(() => {
     const t = newTicker.trim().toUpperCase();
     if (!t || tickers.includes(t)) return;
     setTickers((prev) => [...prev, t]);
+    if (!selectedTicker) {
+      onSelectTicker(t);
+    }
     setNewTicker("");
-    api.addTicker(t).catch(() => {
-      setTickers((prev) => prev.filter((x) => x !== t));
-    });
-  }, [newTicker, tickers]);
+    api.addTicker(t)
+      .then(() => {
+        onWatchlistChanged?.();
+      })
+      .catch(() => {
+        setTickers((prev) => prev.filter((x) => x !== t));
+      });
+  }, [newTicker, onSelectTicker, onWatchlistChanged, selectedTicker, tickers]);
 
   const removeTicker = useCallback((ticker: string) => {
     setTickers((prev) => prev.filter((t) => t !== ticker));
-    api.removeTicker(ticker).catch(() => {
-      setTickers((prev) => [...prev, ticker]);
-    });
-  }, []);
+    if (selectedTicker === ticker) {
+      const nextTicker = tickers.find((t) => t !== ticker);
+      if (nextTicker) {
+        onSelectTicker(nextTicker);
+      }
+    }
+    api.removeTicker(ticker)
+      .then(() => {
+        onWatchlistChanged?.();
+      })
+      .catch(() => {
+        setTickers((prev) => [...prev, ticker]);
+      });
+  }, [onSelectTicker, onWatchlistChanged, selectedTicker, tickers]);
 
   return (
     <div className="flex h-full flex-col">

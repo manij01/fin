@@ -6,7 +6,11 @@ import { api, type SnapshotResponse } from "@/lib/api";
 
 const REFRESH_MS = 30_000;
 
-export default function PnlChart() {
+interface PnlChartProps {
+  refreshToken?: number;
+}
+
+export default function PnlChart({ refreshToken = 0 }: PnlChartProps) {
   const [snapshots, setSnapshots] = useState<SnapshotResponse[]>([]);
 
   useEffect(() => {
@@ -27,7 +31,7 @@ export default function PnlChart() {
       mounted = false;
       clearInterval(interval);
     };
-  }, []);
+  }, [refreshToken]);
 
   if (snapshots.length < 2) {
     return (
