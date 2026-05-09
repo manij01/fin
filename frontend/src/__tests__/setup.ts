@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
-import { afterEach } from "vitest";
+import { afterEach, vi } from "vitest";
 
 afterEach(() => {
   cleanup();
@@ -9,9 +9,10 @@ afterEach(() => {
 // jsdom doesn't implement scrollTo
 Element.prototype.scrollTo = () => {};
 
-// jsdom doesn't implement ResizeObserver, which chart components use.
-globalThis.ResizeObserver = class ResizeObserver {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-};
+class MockResizeObserver {
+  observe = vi.fn();
+  unobserve = vi.fn();
+  disconnect = vi.fn();
+}
+
+vi.stubGlobal("ResizeObserver", MockResizeObserver);

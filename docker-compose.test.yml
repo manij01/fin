@@ -6,17 +6,28 @@ services:
     environment:
       - LLM_MOCK=true
       - MASSIVE_API_KEY=
-      - DB_PATH=/tmp/finally-test/finally.db
-    ports:
-      - "8000:8000"
+      - DB_PATH=/tmp/test.db
+    command:
+      [
+        "sh",
+        "-c",
+        "rm -f /tmp/test.db /tmp/test.db-* && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000",
+      ]
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2).read()"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=2).read()",
+        ]
       interval: 5s
       timeout: 3s
       retries: 10
 
   playwright:
     image: mcr.microsoft.com/playwright:v1.52.0-jammy
+    ipc: host
     depends_on:
       app:
         condition: service_healthy
@@ -25,4 +36,4 @@ services:
     working_dir: /work
     volumes:
       - ./test:/work
-    command: npx playwright test
+    command: sh -c "npm install --package-lock=false && npm test"

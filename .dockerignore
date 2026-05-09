@@ -6,11 +6,12 @@
 .env
 db/
 node_modules/
-frontend/node_modules/
+**/node_modules/
 __pycache__/
+**/__pycache__/
 .venv/
-backend/.venv/
+**/.venv/
 .next/
-frontend/.next/
+**/.next/
 out/
-frontend/out/
+**/out/

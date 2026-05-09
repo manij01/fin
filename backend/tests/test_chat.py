@@ -76,6 +76,7 @@ async def test_chat_buy_aapl(client):
     portfolio = resp.json()
     assert portfolio["cash_balance"] == 10000.0 - (10 * 150.0)
     assert portfolio["positions"][0]["ticker"] == "AAPL"
+    assert portfolio["positions"][0]["quantity"] == 10
     assert portfolio["positions"][0]["avg_cost"] == 150.0
 
     resp = await client.get("/api/portfolio/history")
@@ -132,6 +133,9 @@ async def test_chat_watchlist_add(client):
     assert data["watchlist_changes"] is not None
     assert data["watchlist_changes"][0]["ticker"] == "PYPL"
     assert data["watchlist_changes"][0]["action"] == "add"
+
+    watchlist = (await client.get("/api/watchlist")).json()
+    assert "PYPL" in {item["ticker"] for item in watchlist}
 
     resp = await client.post("/api/chat", json={"message": "add PYPL to watchlist"})
     data = resp.json()

@@ -15,6 +15,7 @@ vi.mock("recharts", () => ({
 vi.mock("lightweight-charts", () => ({
   createChart: () => ({
     addSeries: () => ({ setData: vi.fn(), update: vi.fn() }),
+    addLineSeries: () => ({ setData: vi.fn(), update: vi.fn() }),
     timeScale: () => ({ fitContent: vi.fn() }),
     applyOptions: vi.fn(),
     remove: vi.fn(),
@@ -26,14 +27,38 @@ vi.mock("lightweight-charts", () => ({
 
 // Mock EventSource for useMarketData
 class MockEventSource {
+  static instances: MockEventSource[] = [];
+
   onopen: (() => void) | null = null;
   onmessage: ((e: MessageEvent) => void) | null = null;
   onerror: (() => void) | null = null;
-  addEventListener = vi.fn();
-  removeEventListener = vi.fn();
+  listeners = new Map<string, ((e: MessageEvent) => void)[]>();
   close = vi.fn();
+
   constructor() {
+    MockEventSource.instances.push(this);
     setTimeout(() => this.onopen?.(), 0);
+  }
+
+  addEventListener(type: string, listener: (e: MessageEvent) => void) {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+  }
+
+  removeEventListener(type: string, listener: (e: MessageEvent) => void) {
+    this.listeners.set(
+      type,
+      (this.listeners.get(type) ?? []).filter((item) => item !== listener)
+    );
+  }
+
+  emit(type: string, data: unknown) {
+    const event = { data: JSON.stringify(data) } as MessageEvent;
+    this.listeners.get(type)?.forEach((listener) => listener(event));
+    if (type === "message") this.onmessage?.(event);
+  }
+
+  fail() {
+    this.onerror?.();
   }
 }
 vi.stubGlobal("EventSource", MockEventSource);
@@ -58,6 +83,7 @@ import Home from "@/app/page";
 describe("Portfolio Page Integration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    MockEventSource.instances = [];
     vi.mocked(api.getWatchlist).mockResolvedValue([]);
     vi.mocked(api.getPortfolioHistory).mockResolvedValue([]);
   });
@@ -175,5 +201,45 @@ describe("Portfolio Page Integration", () => {
     // Should show $0.00 (initial state) without crashing
     const zeros = screen.getAllByText("$0.00");
     expect(zeros.length).toBe(2); // Portfolio and Cash both show $0.00
+  });
+
+  it("renders SSE connection and streamed watchlist price updates", async () => {
+    vi.mocked(api.getPortfolio).mockResolvedValue({
+      cash_balance: 10000.0,
+      total_value: 10000.0,
+      positions: [],
+    });
+    vi.mocked(api.getWatchlist).mockResolvedValue([{ ticker: "AAPL" }]);
+
+    render(<Home />);
+
+    expect(await screen.findByText("connected")).toBeInTheDocument();
+    expect(await screen.findAllByText("AAPL")).not.toHaveLength(0);
+
+    MockEventSource.instances[0].emit("price", {
+      ticker: "AAPL",
+      price: 151.25,
+      previous_price: 150,
+      timestamp: "2026-01-01T00:00:00Z",
+      direction: "up",
+    });
+
+    expect(await screen.findByText("151.25")).toBeInTheDocument();
+    expect(screen.getByText("+0.83%")).toBeInTheDocument();
+  });
+
+  it("shows reconnecting when the SSE connection errors", async () => {
+    vi.mocked(api.getPortfolio).mockResolvedValue({
+      cash_balance: 10000.0,
+      total_value: 10000.0,
+      positions: [],
+    });
+
+    render(<Home />);
+
+    expect(await screen.findByText("connected")).toBeInTheDocument();
+    MockEventSource.instances[0].fail();
+
+    expect(await screen.findByText("reconnecting")).toBeInTheDocument();
   });
 });

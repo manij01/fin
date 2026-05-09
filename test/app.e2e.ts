@@ -9,6 +9,22 @@ test.describe("Fresh start", () => {
     await expect(page.getByRole("heading", { level: 1 })).toContainText(
       "FinAlly"
     );
+    for (const ticker of [
+      "AAPL",
+      "GOOGL",
+      "MSFT",
+      "AMZN",
+      "TSLA",
+      "NVDA",
+      "META",
+      "JPM",
+      "V",
+      "NFLX",
+    ]) {
+      await expect(
+        page.locator("td").filter({ hasText: new RegExp(`^${ticker}$`) })
+      ).toBeVisible();
+    }
   });
 
   test("prices are streaming via SSE", async ({ page }) => {
@@ -42,43 +58,64 @@ test.describe("Watchlist CRUD", () => {
 test.describe("Trading", () => {
   test("buy shares: cash decreases and position appears", async ({ page }) => {
     await page.goto("/");
-    // Wait for prices to be available
     await expect(page.getByText("connected")).toBeVisible({ timeout: 10_000 });
 
-    // Look for a trade input or bar - implementation-dependent
-    const tradePanel = page.locator("[class*=Trade]").or(page.getByText("Trade"));
-    if (await tradePanel.isVisible()) {
-      // Trade panel exists - implementation-specific assertions would go here
-      await expect(tradePanel).toBeVisible();
-    }
+    await page.getByPlaceholder("Ticker", { exact: true }).fill("AAPL");
+    await page.getByPlaceholder("Qty").fill("1");
+    await page.getByRole("button", { name: "BUY" }).click();
+
+    await expect(page.getByText(/BUY 1 AAPL @ \$\d/)).toBeVisible({
+      timeout: 5_000,
+    });
+    await expect(page.getByText("Cash").locator("..")).not.toContainText(
+      "$10,000.00"
+    );
   });
 
   test("sell shares: cash increases and position updates", async ({ page }) => {
     await page.goto("/");
     await expect(page.getByText("connected")).toBeVisible({ timeout: 10_000 });
 
-    // Placeholder for when trade execution is implemented
-    const tradePanel = page.locator("[class*=Trade]").or(page.getByText("Trade"));
-    if (await tradePanel.isVisible()) {
-      await expect(tradePanel).toBeVisible();
-    }
+    await page.getByPlaceholder("Ticker", { exact: true }).fill("MSFT");
+    await page.getByPlaceholder("Qty").fill("1");
+    await page.getByRole("button", { name: "BUY" }).click();
+    await expect(page.getByText(/BUY 1 MSFT @ \$\d/)).toBeVisible({
+      timeout: 5_000,
+    });
+
+    await page.getByPlaceholder("Ticker", { exact: true }).fill("MSFT");
+    await page.getByPlaceholder("Qty").fill("1");
+    await page.getByRole("button", { name: "SELL" }).click();
+    await expect(page.getByText(/SELL 1 MSFT @ \$\d/)).toBeVisible({
+      timeout: 5_000,
+    });
   });
 });
 
 test.describe("Portfolio visualization", () => {
-  test("heatmap panel renders", async ({ page }) => {
+  test("heatmap panel renders a bought position", async ({ page }) => {
     await page.goto("/");
     await expect(page.getByText("Portfolio Heatmap")).toBeVisible();
+
+    await expect(page.getByText("connected")).toBeVisible({ timeout: 10_000 });
+    await page.getByPlaceholder("Ticker", { exact: true }).fill("TSLA");
+    await page.getByPlaceholder("Qty").fill("1");
+    await page.getByRole("button", { name: "BUY" }).click();
+
+    await expect(page.getByText(/BUY 1 TSLA @ \$\d/)).toBeVisible({
+      timeout: 5_000,
+    });
+    await expect(page.getByText("TSLA").nth(1)).toBeVisible();
   });
 
   test("P&L panel renders", async ({ page }) => {
     await page.goto("/");
-    await expect(page.getByText("P&L")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "P&L" })).toBeVisible();
   });
 });
 
 test.describe("AI Chat", () => {
-  test("send a message and get a response", async ({ page }) => {
+  test("send a message and execute a mocked trade action", async ({ page }) => {
     await page.goto("/");
 
     // Chat panel should be visible
@@ -91,18 +128,17 @@ test.describe("AI Chat", () => {
 
     // Type and send a message
     const chatInput = page.getByPlaceholder("Message...");
-    await chatInput.fill("What stocks should I buy?");
+    await chatInput.fill("buy AAPL");
     await page.getByRole("button", { name: "Send" }).click();
 
     // User message should appear
-    await expect(
-      page.getByText("What stocks should I buy?")
-    ).toBeVisible();
+    await expect(page.getByText("buy AAPL")).toBeVisible();
 
     // Wait for assistant response (mocked or real)
-    await expect(
-      page.locator(".bg-bg-secondary.text-text-primary").first()
-    ).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("Buying 10 shares of AAPL for you.")).toBeVisible({
+      timeout: 15_000,
+    });
+    await expect(page.getByText("Bought 10 AAPL")).toBeVisible();
   });
 
   test("chat panel collapses and expands", async ({ page }) => {
@@ -120,22 +156,15 @@ test.describe("AI Chat", () => {
 
 test.describe("SSE resilience", () => {
   test("reconnects after disconnect", async ({ page }) => {
-    await page.goto("/");
-    // Wait for initial connection
-    await expect(page.getByText("connected")).toBeVisible({ timeout: 10_000 });
-
-    // Simulate disconnect by blocking the SSE endpoint
     await page.route("**/api/stream/prices", (route) => route.abort());
 
-    // Should show reconnecting
+    await page.goto("/");
     await expect(page.getByText("reconnecting")).toBeVisible({
       timeout: 10_000,
     });
 
-    // Restore the route
     await page.unroute("**/api/stream/prices");
 
-    // Should reconnect
     await expect(page.getByText("connected")).toBeVisible({ timeout: 15_000 });
   });
 });
