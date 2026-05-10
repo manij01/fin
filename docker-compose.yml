@@ -10,6 +10,7 @@ services:
       LLM_MOCK: ${LLM_MOCK:-false}
       MASSIVE_API_KEY: ${MASSIVE_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_AI_KEY: ${OPENAI_AI_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
 
 volumes:

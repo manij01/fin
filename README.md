@@ -64,3 +64,6 @@ OPENAI_MODEL=gpt-4o-mini
 MASSIVE_API_KEY=
 LLM_MOCK=false
 ```
+
+`OPENAI_API_KEY` is the preferred key name. `OPENAI_AI_KEY` is also accepted as
+a compatibility alias for local `.env` files.

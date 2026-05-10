@@ -240,8 +240,19 @@ def _llm_mock_enabled() -> bool:
 
 def _has_openai_api_key() -> bool:
     """Return true when the OpenAI key looks intentionally configured."""
-    key = os.environ.get("OPENAI_API_KEY", "").strip()
+    key = _openai_api_key()
     return key not in OPENAI_PLACEHOLDER_KEYS
+
+
+def _openai_api_key() -> str:
+    """Return the canonical OpenAI key, accepting the legacy alias if needed."""
+    return os.environ.get("OPENAI_API_KEY", os.environ.get("OPENAI_AI_KEY", "")).strip()
+
+
+def _ensure_litellm_openai_key() -> None:
+    """Expose the alias under LiteLLM's expected env var name."""
+    if not os.environ.get("OPENAI_API_KEY") and os.environ.get("OPENAI_AI_KEY"):
+        os.environ["OPENAI_API_KEY"] = os.environ["OPENAI_AI_KEY"]
 
 
 def _fallback_response(message: str, reason: str | None = None) -> ChatResponse:
@@ -345,6 +356,7 @@ def _coerce_chat_response(payload: dict[str, Any]) -> ChatResponse:
 async def _call_llm(messages: list[dict], fallback_message: str) -> ChatResponse:
     """Call LLM via LiteLLM -> OpenAI and parse structured response."""
     try:
+        _ensure_litellm_openai_key()
         response = await acompletion(
             model=os.environ.get("OPENAI_MODEL", DEFAULT_OPENAI_MODEL),
             messages=messages,

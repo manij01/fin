@@ -123,6 +123,7 @@ finally/
 ```bash
 # Optional: OpenAI API key for live LLM chat functionality
 # If not set, deterministic local demo chat is used
+# OPENAI_AI_KEY is accepted as a compatibility alias, but OPENAI_API_KEY is preferred
 OPENAI_API_KEY=your-openai-api-key-here
 
 # Optional: OpenAI model for live LLM chat

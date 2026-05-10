@@ -1,6 +1,7 @@
 """Tests for the POST /api/chat endpoint in mock mode."""
 
 import os
+from types import SimpleNamespace
 
 os.environ["LLM_MOCK"] = "true"
 
@@ -190,6 +191,30 @@ async def test_chat_falls_back_when_openai_provider_fails(client, monkeypatch):
     data = resp.json()
     assert "FinAlly" in data["message"]
     assert "AI provider unavailable" in data["message"]
+
+
+async def test_chat_accepts_openai_ai_key_alias(client, monkeypatch):
+    async def fake_completion(*args, **kwargs):
+        assert os.environ["OPENAI_API_KEY"] == "sk-alias"
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content='{"message":"Alias key response."}'
+                    )
+                )
+            ]
+        )
+
+    monkeypatch.setenv("LLM_MOCK", "false")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_AI_KEY", "sk-alias")
+    monkeypatch.setattr(chat_module, "acompletion", fake_completion)
+
+    resp = await client.post("/api/chat", json={"message": "hello"})
+
+    assert resp.status_code == 200
+    assert resp.json()["message"] == "Alias key response."
 
 
 async def test_chat_persists_history_actions_and_errors(client):
