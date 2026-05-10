@@ -9,7 +9,8 @@ services:
       DB_PATH: /app/db/finally.db
       LLM_MOCK: ${LLM_MOCK:-false}
       MASSIVE_API_KEY: ${MASSIVE_API_KEY:-}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
 
 volumes:
   finally-data:

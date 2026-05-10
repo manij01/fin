@@ -9,6 +9,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 import app.database as database
+import app.chat as chat_module
 from app.chat import _coerce_chat_response
 from app.main import app
 from app.market.cache import price_cache
@@ -162,6 +163,33 @@ async def test_chat_fallback(client):
     resp = await client.post("/api/chat", json={"message": "random nonsense xyz"})
     data = resp.json()
     assert "trade" in data["message"].lower() or "portfolio" in data["message"].lower()
+
+
+async def test_chat_uses_demo_mode_without_openai_key(client, monkeypatch):
+    monkeypatch.setenv("LLM_MOCK", "false")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    resp = await client.post("/api/chat", json={"message": "hello"})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "FinAlly" in data["message"]
+
+
+async def test_chat_falls_back_when_openai_provider_fails(client, monkeypatch):
+    async def fail_completion(*args, **kwargs):
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setenv("LLM_MOCK", "false")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(chat_module, "acompletion", fail_completion)
+
+    resp = await client.post("/api/chat", json={"message": "hello"})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "FinAlly" in data["message"]
+    assert "AI provider unavailable" in data["message"]
 
 
 async def test_chat_persists_history_actions_and_errors(client):

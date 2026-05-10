@@ -59,7 +59,8 @@ cp .env.example .env
 Supported variables:
 
 ```bash
-OPENROUTER_API_KEY=your-openrouter-api-key-here
+OPENAI_API_KEY=your-openai-api-key-here
+OPENAI_MODEL=gpt-4o-mini
 MASSIVE_API_KEY=
 LLM_MOCK=false
 ```

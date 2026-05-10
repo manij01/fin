@@ -1,4 +1,4 @@
-"""POST /api/chat — LLM chat with auto-execution of trades and watchlist changes."""
+"""POST /api/chat - LLM chat with auto-execution of trades and watchlist changes."""
 
 import json
 import os
@@ -17,6 +17,13 @@ from app.portfolio import TradeExecutionError, execute_trade_for_user
 from app.tickers import normalize_ticker
 
 router = APIRouter()
+
+DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+OPENAI_PLACEHOLDER_KEYS = {
+    "",
+    "your-openai-api-key",
+    "your-openai-api-key-here",
+}
 
 # ---------------------------------------------------------------------------
 # Pydantic models
@@ -226,6 +233,28 @@ def _mock_response(message: str) -> ChatResponse:
     )
 
 
+def _llm_mock_enabled() -> bool:
+    """Return true when deterministic local chat should be used."""
+    return os.environ.get("LLM_MOCK", "").lower() == "true"
+
+
+def _has_openai_api_key() -> bool:
+    """Return true when the OpenAI key looks intentionally configured."""
+    key = os.environ.get("OPENAI_API_KEY", "").strip()
+    return key not in OPENAI_PLACEHOLDER_KEYS
+
+
+def _fallback_response(message: str, reason: str | None = None) -> ChatResponse:
+    """Use the deterministic local assistant when the provider is unavailable."""
+    response = _mock_response(message)
+    if reason:
+        response.message += (
+            "\n\n(Note: AI provider unavailable; using local demo chat. "
+            f"{reason})"
+        )
+    return response
+
+
 # ---------------------------------------------------------------------------
 # Watchlist changes
 # ---------------------------------------------------------------------------
@@ -313,18 +342,15 @@ def _coerce_chat_response(payload: dict[str, Any]) -> ChatResponse:
     )
 
 
-async def _call_llm(messages: list[dict]) -> ChatResponse:
-    """Call LLM via LiteLLM -> OpenRouter and parse structured response."""
-    response = await acompletion(
-        model="openrouter/openai/gpt-oss-120b",
-        messages=messages,
-        extra_body={
-            "response_format": {"type": "json_object"},
-        },
-    )
-
-    content = response.choices[0].message.content
+async def _call_llm(messages: list[dict], fallback_message: str) -> ChatResponse:
+    """Call LLM via LiteLLM -> OpenAI and parse structured response."""
     try:
+        response = await acompletion(
+            model=os.environ.get("OPENAI_MODEL", DEFAULT_OPENAI_MODEL),
+            messages=messages,
+            response_format={"type": "json_object"},
+        )
+        content = response.choices[0].message.content
         parsed = json.loads(content) if isinstance(content, str) else content
         if not isinstance(parsed, dict):
             raise TypeError("LLM response was not a JSON object")
@@ -336,6 +362,8 @@ async def _call_llm(messages: list[dict]) -> ChatResponse:
                 f"\n\n(Errors: {exc})"
             )
         )
+    except Exception as exc:
+        return _fallback_response(fallback_message, str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -348,8 +376,9 @@ async def chat(req: ChatRequest):
     """Send a message and receive a structured response with auto-executed actions."""
     db = await get_db()
     try:
-        # Check mock mode
-        if os.environ.get("LLM_MOCK", "").lower() == "true":
+        # Check mock/demo mode. Local startup should keep chat usable even
+        # before an OpenAI key has been configured.
+        if _llm_mock_enabled() or not _has_openai_api_key():
             result = _mock_response(req.message)
         else:
             # Build LLM messages
@@ -366,7 +395,7 @@ async def chat(req: ChatRequest):
                 {"role": "user", "content": req.message},
             ]
 
-            result = await _call_llm(messages)
+            result = await _call_llm(messages, req.message)
 
         # Auto-execute trades
         errors = []
